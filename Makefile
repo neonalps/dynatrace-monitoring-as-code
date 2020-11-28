@@ -12,6 +12,10 @@ endif
 format:
 	@gofmt -w .
 
+mocks:
+	@go get github.com/golang/mock/mockgen
+	@go generate ./...
+
 build: clean lint
 	@echo Build ${BINARY}
 	@go build ./...
@@ -31,7 +35,7 @@ else
 	@rm -rf bin/
 endif
 
-test: build
+test: mocks build
 	@go test -tags=unit -v ./...
 
 integration-test: build
@@ -41,5 +45,5 @@ integration-test: build
 # Build and Test a single package supplied via pgk variable, without using test cache
 # Run as e.g. make test-package pkg=project
 pkg=...
-test-package: build
+test-package: mocks build
 	@go test -tags=unit -count=1 -v ./pkg/${pkg}
