@@ -35,43 +35,45 @@ import (
 )
 
 func AssertConfigAvailable(projects []project.Project, t *testing.T, environments map[string]environment.Environment, available bool) {
-	for _, project := range projects {
-		for _, config := range project.GetConfigs() {
-			AssertConfig(t, environments, available, config)
-		}
-	}
-}
-
-func AssertConfig(t *testing.T, environments map[string]environment.Environment, available bool, config config.Config) {
-	configType := config.GetType()
-	api := config.GetApi()
-	name := config.GetProperties()[config.GetId()]["name"]
 	for _, environment := range environments {
 
 		token, err := environment.GetToken()
 		assert.NilError(t, err)
+		client := rest.NewDynatraceClient(environment.GetEnvironmentUrl(), token)
 
-		_, existingId, _ := rest.GetObjectIdIfAlreadyExists(configType, api.GetUrl(environment), name, token)
-
-		if config.IsSkipDeployment(environment) {
-			assert.Equal(t, existingId, "", "Object should NOT be available, but was. environment.Environment: '"+environment.GetId()+"', failed for '"+name+"' ("+configType+")")
-			continue
+		for _, project := range projects {
+			for _, config := range project.GetConfigs() {
+				AssertConfig(t, client, environment, available, config)
+			}
 		}
+	}
+}
 
-		description := fmt.Sprintf("%s %s on environment %s", configType, name, environment.GetId())
+func AssertConfig(t *testing.T, client rest.DynatraceClient, environment environment.Environment, shouldBeAvailable bool, config config.Config) {
+	configType := config.GetType()
+	api := config.GetApi()
+	name := config.GetProperties()[config.GetId()]["name"]
 
-		// 120 polling cycles -> Wait at most 120 * 2 seconds = 4 Minutes:
-		err = rest.Wait(description, 120, func() bool {
-			_, existingId, _ = rest.GetObjectIdIfAlreadyExists(configType, api.GetUrl(environment), name, token)
-			return (available && len(existingId) > 0) || (!available && len(existingId) == 0)
-		})
-		assert.NilError(t, err)
+	_, existingId, _ := client.ExistsByName(api, name)
 
-		if available {
-			assert.Check(t, len(existingId) > 0, "Object should be available, but wasn't. environment.Environment: '"+environment.GetId()+"', failed for '"+name+"' ("+configType+")")
-		} else {
-			assert.Equal(t, existingId, "", "Object should NOT be available, but was. environment.Environment: '"+environment.GetId()+"', failed for '"+name+"' ("+configType+")")
-		}
+	if config.IsSkipDeployment(environment) {
+		assert.Equal(t, existingId, "", "Object should NOT be available, but was. environment.Environment: '"+environment.GetId()+"', failed for '"+name+"' ("+configType+")")
+		return
+	}
+
+	description := fmt.Sprintf("%s %s on environment %s", configType, name, environment.GetId())
+
+	// 120 polling cycles -> Wait at most 120 * 2 seconds = 4 Minutes:
+	err := rest.Wait(description, 120, func() bool {
+		_, existingId, _ := client.ExistsByName(api, name)
+		return (shouldBeAvailable && len(existingId) > 0) || (!shouldBeAvailable && len(existingId) == 0)
+	})
+	assert.NilError(t, err)
+
+	if shouldBeAvailable {
+		assert.Check(t, len(existingId) > 0, "Object should be available, but wasn't. environment.Environment: '"+environment.GetId()+"', failed for '"+name+"' ("+configType+")")
+	} else {
+		assert.Equal(t, existingId, "", "Object should NOT be available, but was. environment.Environment: '"+environment.GetId()+"', failed for '"+name+"' ("+configType+")")
 	}
 }
 
@@ -110,18 +112,22 @@ func cleanupIntegrationTest(t *testing.T, envFile, suffix string, integrationTes
 	suffix = "_" + suffix
 
 	for _, environment := range environments {
+
 		token, err := environment.GetToken()
 		assert.NilError(t, err)
+
+		client := rest.NewDynatraceClient(environment.GetEnvironmentUrl(), token)
+
 		for _, api := range apis {
 
-			_, values, err := rest.GetExistingValuesFromEndpoint(api.GetId(), api.GetUrl(environment), token)
+			values, err := client.List(api)
 			assert.NilError(t, err)
 
 			for _, value := range values {
 				// For the calculated-metrics-log API, the suffix is part of the ID, not name
 				if strings.HasSuffix(value.Name, suffix) || strings.HasSuffix(value.Id, suffix) {
 					util.Log.Info("Deleting %s (%s)", value.Name, api.GetId())
-					rest.Delete(api.GetUrl(environment), token, value.Id)
+					client.DeleteByName(api, value.Name)
 				}
 			}
 		}
